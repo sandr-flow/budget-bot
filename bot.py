@@ -1,5 +1,5 @@
-"""
-Telegram Bot для учета семейных финансов
+"""Family budget tracking Telegram bot.
+
 Aiogram 3.x + Google Sheets + FSM
 """
 import asyncio
@@ -19,14 +19,14 @@ from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Загрузка переменных окружения
+# Load environment variables
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID = os.getenv("SHEET_ID")
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
 
-# Конфигурация таблицы
+# Sheet configuration
 SHEET_TRANSACTIONS = "Транзакции"
 SHEET_SETTINGS = "Settings"
 START_ROW = 4
@@ -34,7 +34,7 @@ EXPENSE_COLS = {"date": 2, "amount": 3, "desc": 4, "category": 5}  # B-E
 INCOME_COLS = {"date": 7, "amount": 8, "desc": 9, "category": 10}  # G-J
 TIMEZONE_OFFSET = 4
 
-# Кэш категорий
+# Categories cache
 categories_cache = []
 
 
@@ -43,10 +43,12 @@ categories_cache = []
 # ============================================
 
 class TransactionStates(StatesGroup):
+    """FSM states for transaction creation flow."""
+
     waiting_amount = State()
-    waiting_type = State()  # Ожидание выбора типа (расход/доход)
+    waiting_type = State()  # Waiting for type selection (expense/income)
     waiting_category = State()
-    waiting_description = State()  # Описание теперь в конце
+    waiting_description = State()  # Description is now at the end
 
 
 # ============================================
@@ -54,7 +56,7 @@ class TransactionStates(StatesGroup):
 # ============================================
 
 def get_sheets_client():
-    """Подключение к Google Sheets"""
+    """Create and return an authorized Google Sheets client."""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -64,7 +66,11 @@ def get_sheets_client():
 
 
 def load_categories() -> list[dict]:
-    """Загрузить категории"""
+    """Load categories from the Settings sheet.
+
+    Returns:
+        List of category dictionaries with 'name' and 'type' keys.
+    """
     global categories_cache
     try:
         client = get_sheets_client()
@@ -86,7 +92,17 @@ def load_categories() -> list[dict]:
 
 
 def write_transaction(trans_type: str, amount: float, description: str, category: str):
-    """Записать транзакцию"""
+    """Write a transaction to the Google Sheet.
+
+    Args:
+        trans_type: Transaction type ('expense' or 'income').
+        amount: Transaction amount.
+        description: Transaction description.
+        category: Category name.
+
+    Returns:
+        True if successful, False otherwise.
+    """
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_TRANSACTIONS)
@@ -123,7 +139,7 @@ router = Router()
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
-    """Главная клавиатура: Расход / Доход"""
+    """Return the main keyboard with Expense/Income buttons."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💸 Расход", callback_data="type:expense"),
@@ -133,19 +149,26 @@ def main_keyboard() -> InlineKeyboardMarkup:
 
 
 def skip_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка пропустить описание"""
+    """Return the keyboard with Skip description button."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_desc")]
     ])
 
 
 def category_keyboard(trans_type: str) -> InlineKeyboardMarkup:
-    """Клавиатура категорий (только релевантные)"""
+    """Return the category selection keyboard filtered by transaction type.
+
+    Args:
+        trans_type: Transaction type ('expense' or 'income').
+
+    Returns:
+        InlineKeyboardMarkup with relevant category buttons.
+    """
     buttons = []
     row = []
     
     for i, cat in enumerate(categories_cache):
-        # Фильтруем по типу
+        # Filter by type
         cat_type = cat["type"]
         if trans_type == "expense" and ("expense" in cat_type or "expence" in cat_type):
             row.append(InlineKeyboardButton(text=cat["name"], callback_data=f"cat:{i}"))
@@ -159,7 +182,7 @@ def category_keyboard(trans_type: str) -> InlineKeyboardMarkup:
     if row:
         buttons.append(row)
     
-    # Кнопка отмены
+    # Cancel button
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -171,7 +194,7 @@ def category_keyboard(trans_type: str) -> InlineKeyboardMarkup:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    """Команда /start"""
+    """Handle the /start command."""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
@@ -184,17 +207,21 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(F.text, StateFilter(None))
 async def any_message(message: Message, state: FSMContext):
-    """Любое сообщение без состояния -> проверяем на число или показываем меню"""
+    """Handle any text message when no FSM state is active.
+
+    If the message is a valid positive number, treat it as an amount
+    and prompt for transaction type. Otherwise, show the main menu.
+    """
     if message.from_user.id not in ALLOWED_USERS:
         return
     
     text = message.text.strip().replace(",", ".").replace(" ", "")
     
-    # Проверяем, является ли ввод числом (суммой)
+    # Check if input is a number (amount)
     try:
         amount = float(text)
         if amount > 0:
-            # Сохраняем сумму и спрашиваем тип операции
+            # Save amount and ask for transaction type
             await state.update_data(amount=amount)
             await state.set_state(TransactionStates.waiting_type)
             await message.answer(
@@ -206,7 +233,7 @@ async def any_message(message: Message, state: FSMContext):
     except ValueError:
         pass
     
-    # Если не число - показываем главное меню
+    # If not a number, show main menu
     await message.answer(
         "Выбери тип операции:",
         reply_markup=main_keyboard()
@@ -215,7 +242,10 @@ async def any_message(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("type:"), StateFilter(None))
 async def select_type_no_amount(callback: CallbackQuery, state: FSMContext):
-    """Выбор типа без предварительной суммы: сначала запрашиваем сумму"""
+    """Handle type selection when no amount was pre-entered.
+
+    Prompts the user to enter the amount first.
+    """
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
@@ -235,7 +265,10 @@ async def select_type_no_amount(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("type:"), TransactionStates.waiting_type)
 async def select_type_with_amount(callback: CallbackQuery, state: FSMContext):
-    """Выбор типа после ввода суммы: сразу показываем категории"""
+    """Handle type selection after amount was already entered.
+
+    Proceeds directly to category selection.
+    """
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
@@ -259,7 +292,7 @@ async def select_type_with_amount(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TransactionStates.waiting_amount)
 async def enter_amount(message: Message, state: FSMContext):
-    """Ввод суммы (после выбора типа)"""
+    """Handle amount input after transaction type was selected."""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
@@ -287,7 +320,7 @@ async def enter_amount(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("cat:"), TransactionStates.waiting_category)
 async def select_category(callback: CallbackQuery, state: FSMContext):
-    """Выбор категории -> переход к описанию"""
+    """Handle category selection and proceed to description input."""
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
@@ -315,13 +348,13 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "skip_desc", TransactionStates.waiting_description)
 async def skip_description(callback: CallbackQuery, state: FSMContext):
-    """Пропуск описания -> сохранение транзакции"""
+    """Handle skipping description and save the transaction."""
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
     data = await state.get_data()
     
-    # Записываем транзакцию
+    # Write transaction
     success = write_transaction(
         data["trans_type"],
         data["amount"],
@@ -349,14 +382,14 @@ async def skip_description(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TransactionStates.waiting_description)
 async def enter_description(message: Message, state: FSMContext):
-    """Ввод описания -> сохранение транзакции"""
+    """Handle description input and save the transaction."""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
-    description = message.text.strip()[:100]  # Ограничиваем длину
+    description = message.text.strip()[:100]  # Limit length
     data = await state.get_data()
     
-    # Записываем транзакцию
+    # Write transaction
     success = write_transaction(
         data["trans_type"],
         data["amount"],
@@ -381,12 +414,9 @@ async def enter_description(message: Message, state: FSMContext):
     await state.clear()
 
 
-# Старый обработчик select_category удалён - логика перенесена выше
-
-
 @router.callback_query(F.data == "cancel")
 async def cancel(callback: CallbackQuery, state: FSMContext):
-    """Отмена"""
+    """Handle cancel button and clear FSM state."""
     await state.clear()
     await callback.message.edit_text("❌ Отменено")
     await callback.answer()
@@ -400,7 +430,7 @@ dp.include_router(router)
 
 
 async def main():
-    """Запуск бота"""
+    """Initialize and run the bot."""
     print("Bot starting...")
     print(f"Allowed users: {ALLOWED_USERS}")
     
