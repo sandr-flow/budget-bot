@@ -53,10 +53,14 @@ pip install -r requirements.txt
    - Go to [Google Cloud Console](https://console.cloud.google.com/)
    - Create a project and enable **Google Sheets API** and **Google Drive API**
    - Create a Service Account and download the JSON key
-   - Place the JSON file in the project root
+   - Rename the JSON file to `service_account.json` and place it in the project root
    - Share your Google Sheet with the service account email (Editor access)
 
-5. Create `.env` file (see [Configuration](#configuration))
+5. Create `.env` file:
+```bash
+cp .env.example .env
+```
+Then edit `.env` with your actual values (see [Configuration](#configuration))
 
 ## Usage
 
