@@ -88,6 +88,8 @@ Create a `.env` file in the project root:
 BOT_TOKEN=your_telegram_bot_token
 SHEET_ID=your_google_sheet_id
 ALLOWED_USERS=123456789,987654321
+GOOGLE_CREDENTIALS_FILE=service_account.json
+TIMEZONE_OFFSET=4
 ```
 
 | Variable | Description |
@@ -95,6 +97,8 @@ ALLOWED_USERS=123456789,987654321
 | `BOT_TOKEN` | Telegram Bot API token from BotFather |
 | `SHEET_ID` | Google Sheets document ID (from URL) |
 | `ALLOWED_USERS` | Comma-separated Telegram user IDs |
+| `GOOGLE_CREDENTIALS_FILE` | Path to service account JSON (default: `service_account.json`) |
+| `TIMEZONE_OFFSET` | UTC offset in hours (default: `4`) |
 
 ### Google Sheet Structure
 

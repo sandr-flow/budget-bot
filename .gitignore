@@ -5,8 +5,8 @@ venv/
 .env
 
 # Google Cloud service account credentials
-*.json
-!package.json
+service_account.json
+analog-woodland-477311-j7-4045d01ab666.json
 
 # Python bytecode
 __pycache__/

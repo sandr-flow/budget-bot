@@ -5,7 +5,7 @@ Aiogram 3.x + Google Sheets + FSM
 import asyncio
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -25,6 +25,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID = os.getenv("SHEET_ID")
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
+GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "service_account.json")
+TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "4"))
 
 # Sheet configuration
 SHEET_TRANSACTIONS = "Транзакции"
@@ -32,7 +34,6 @@ SHEET_SETTINGS = "Settings"
 START_ROW = 4
 EXPENSE_COLS = {"date": 2, "amount": 3, "desc": 4, "category": 5}  # B-E
 INCOME_COLS = {"date": 7, "amount": 8, "desc": 9, "category": 10}  # G-J
-TIMEZONE_OFFSET = 4
 
 # Categories cache
 categories_cache = []
@@ -61,16 +62,12 @@ def get_sheets_client():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds = Credentials.from_service_account_file("analog-woodland-477311-j7-4045d01ab666.json", scopes=scopes)
+    creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
     return gspread.authorize(creds)
 
 
-def load_categories() -> list[dict]:
-    """Load categories from the Settings sheet.
-
-    Returns:
-        List of category dictionaries with 'name' and 'type' keys.
-    """
+def _load_categories_sync() -> list[dict]:
+    """Synchronous implementation of category loading."""
     global categories_cache
     try:
         client = get_sheets_client()
@@ -91,18 +88,18 @@ def load_categories() -> list[dict]:
         return []
 
 
-def write_transaction(trans_type: str, amount: float, description: str, category: str):
-    """Write a transaction to the Google Sheet.
-
-    Args:
-        trans_type: Transaction type ('expense' or 'income').
-        amount: Transaction amount.
-        description: Transaction description.
-        category: Category name.
+async def load_categories() -> list[dict]:
+    """Load categories from the Settings sheet asynchronously.
 
     Returns:
-        True if successful, False otherwise.
+        List of category dictionaries with 'name' and 'type' keys.
     """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _load_categories_sync)
+
+
+def _write_transaction_sync(trans_type: str, amount: float, description: str, category: str) -> bool:
+    """Synchronous implementation of transaction writing."""
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_TRANSACTIONS)
@@ -113,7 +110,6 @@ def write_transaction(trans_type: str, amount: float, description: str, category
         date_values = sheet.col_values(cols["date"])
         next_row = max(len(date_values) + 1, START_ROW)
         
-        from datetime import timezone, timedelta
         tz = timezone(timedelta(hours=TIMEZONE_OFFSET))
         date_str = datetime.now(tz).strftime("%d.%m.%Y")
         
@@ -127,6 +123,24 @@ def write_transaction(trans_type: str, amount: float, description: str, category
     except Exception as e:
         print(f"Error writing transaction: {e}")
         return False
+
+
+async def write_transaction(trans_type: str, amount: float, description: str, category: str) -> bool:
+    """Write a transaction to the Google Sheet asynchronously.
+
+    Args:
+        trans_type: Transaction type ('expense' or 'income').
+        amount: Transaction amount.
+        description: Transaction description.
+        category: Category name.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _write_transaction_sync, trans_type, amount, description, category
+    )
 
 
 # ============================================
@@ -355,7 +369,7 @@ async def skip_description(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
     # Write transaction
-    success = write_transaction(
+    success = await write_transaction(
         data["trans_type"],
         data["amount"],
         "-",
@@ -390,7 +404,7 @@ async def enter_description(message: Message, state: FSMContext):
     data = await state.get_data()
     
     # Write transaction
-    success = write_transaction(
+    success = await write_transaction(
         data["trans_type"],
         data["amount"],
         description,
@@ -434,7 +448,7 @@ async def main():
     print("Bot starting...")
     print(f"Allowed users: {ALLOWED_USERS}")
     
-    load_categories()
+    await load_categories()
     
     await bot.delete_webhook(drop_pending_updates=True)
     print("Webhook deleted, starting polling...")
