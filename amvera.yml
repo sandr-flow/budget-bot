@@ -1,0 +1,13 @@
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: "3.11"
+
+build:
+  dockerfile: null
+
+run:
+  persistenceMount: null
+  containerPort: 8080
+  command: python bot.py

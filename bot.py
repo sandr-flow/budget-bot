@@ -44,8 +44,9 @@ categories_cache = []
 
 class TransactionStates(StatesGroup):
     waiting_amount = State()
-    waiting_description = State()
+    waiting_type = State()  # Ожидание выбора типа (расход/доход)
     waiting_category = State()
+    waiting_description = State()  # Описание теперь в конце
 
 
 # ============================================
@@ -54,21 +55,11 @@ class TransactionStates(StatesGroup):
 
 def get_sheets_client():
     """Подключение к Google Sheets"""
-    import json
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    
-    # Для Render: credentials из переменной окружения
-    creds_json = os.getenv("GOOGLE_CREDENTIALS")
-    if creds_json:
-        creds_data = json.loads(creds_json)
-        creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
-    else:
-        # Для локальной разработки: из файла
-        creds = Credentials.from_service_account_file("analog-woodland-477311-j7-4045d01ab666.json", scopes=scopes)
-    
+    creds = Credentials.from_service_account_file("analog-woodland-477311-j7-4045d01ab666.json", scopes=scopes)
     return gspread.authorize(creds)
 
 
@@ -193,19 +184,38 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(F.text, StateFilter(None))
 async def any_message(message: Message, state: FSMContext):
-    """Любое сообщение без состояния -> показать главное меню"""
+    """Любое сообщение без состояния -> проверяем на число или показываем меню"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
+    text = message.text.strip().replace(",", ".").replace(" ", "")
+    
+    # Проверяем, является ли ввод числом (суммой)
+    try:
+        amount = float(text)
+        if amount > 0:
+            # Сохраняем сумму и спрашиваем тип операции
+            await state.update_data(amount=amount)
+            await state.set_state(TransactionStates.waiting_type)
+            await message.answer(
+                f"💵 Сумма: <b>{amount}</b>\n\n"
+                "Это расход или доход?",
+                reply_markup=main_keyboard()
+            )
+            return
+    except ValueError:
+        pass
+    
+    # Если не число - показываем главное меню
     await message.answer(
         "Выбери тип операции:",
         reply_markup=main_keyboard()
     )
 
 
-@router.callback_query(F.data.startswith("type:"))
-async def select_type(callback: CallbackQuery, state: FSMContext):
-    """Выбор типа: расход или доход"""
+@router.callback_query(F.data.startswith("type:"), StateFilter(None))
+async def select_type_no_amount(callback: CallbackQuery, state: FSMContext):
+    """Выбор типа без предварительной суммы: сначала запрашиваем сумму"""
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
@@ -223,9 +233,33 @@ async def select_type(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("type:"), TransactionStates.waiting_type)
+async def select_type_with_amount(callback: CallbackQuery, state: FSMContext):
+    """Выбор типа после ввода суммы: сразу показываем категории"""
+    if callback.from_user.id not in ALLOWED_USERS:
+        return
+    
+    trans_type = callback.data.split(":")[1]
+    emoji = "💸" if trans_type == "expense" else "💰"
+    type_name = "расход" if trans_type == "expense" else "доход"
+    
+    await state.update_data(trans_type=trans_type)
+    data = await state.get_data()
+    
+    await state.set_state(TransactionStates.waiting_category)
+    
+    await callback.message.edit_text(
+        f"{emoji} <b>{type_name.capitalize()}</b>\n"
+        f"💵 Сумма: <b>{data['amount']}</b>\n\n"
+        "🏷 Выбери категорию:",
+        reply_markup=category_keyboard(trans_type)
+    )
+    await callback.answer()
+
+
 @router.message(TransactionStates.waiting_amount)
 async def enter_amount(message: Message, state: FSMContext):
-    """Ввод суммы"""
+    """Ввод суммы (после выбора типа)"""
     if message.from_user.id not in ALLOWED_USERS:
         return
     
@@ -240,51 +274,12 @@ async def enter_amount(message: Message, state: FSMContext):
         return
     
     await state.update_data(amount=amount)
-    await state.set_state(TransactionStates.waiting_description)
+    data = await state.get_data()
+    
+    await state.set_state(TransactionStates.waiting_category)
     
     await message.answer(
         f"💵 Сумма: <b>{amount}</b>\n\n"
-        "Введи описание или нажми «Пропустить»:",
-        reply_markup=skip_keyboard()
-    )
-
-
-@router.callback_query(F.data == "skip_desc", TransactionStates.waiting_description)
-async def skip_description(callback: CallbackQuery, state: FSMContext):
-    """Пропуск описания"""
-    if callback.from_user.id not in ALLOWED_USERS:
-        return
-    
-    await state.update_data(description="-")
-    data = await state.get_data()
-    
-    await state.set_state(TransactionStates.waiting_category)
-    
-    await callback.message.edit_text(
-        f"💵 Сумма: <b>{data['amount']}</b>\n"
-        f"📝 Описание: <b>-</b>\n\n"
-        "🏷 Выбери категорию:",
-        reply_markup=category_keyboard(data["trans_type"])
-    )
-    await callback.answer()
-
-
-@router.message(TransactionStates.waiting_description)
-async def enter_description(message: Message, state: FSMContext):
-    """Ввод описания"""
-    if message.from_user.id not in ALLOWED_USERS:
-        return
-    
-    description = message.text.strip()[:100]  # Ограничиваем длину
-    
-    await state.update_data(description=description)
-    data = await state.get_data()
-    
-    await state.set_state(TransactionStates.waiting_category)
-    
-    await message.answer(
-        f"💵 Сумма: <b>{data['amount']}</b>\n"
-        f"📝 Описание: <b>{description}</b>\n\n"
         "🏷 Выбери категорию:",
         reply_markup=category_keyboard(data["trans_type"])
     )
@@ -292,12 +287,37 @@ async def enter_description(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("cat:"), TransactionStates.waiting_category)
 async def select_category(callback: CallbackQuery, state: FSMContext):
-    """Выбор категории и сохранение"""
+    """Выбор категории -> переход к описанию"""
     if callback.from_user.id not in ALLOWED_USERS:
         return
     
     cat_index = int(callback.data.split(":")[1])
     category = categories_cache[cat_index]
+    
+    await state.update_data(category=category["name"])
+    data = await state.get_data()
+    
+    await state.set_state(TransactionStates.waiting_description)
+    
+    is_expense = data["trans_type"] == "expense"
+    emoji = "💸" if is_expense else "💰"
+    type_name = "Расход" if is_expense else "Доход"
+    
+    await callback.message.edit_text(
+        f"{emoji} <b>{type_name}</b>\n"
+        f"💵 Сумма: <b>{data['amount']}</b>\n"
+        f"🏷 Категория: <b>{category['name']}</b>\n\n"
+        "📝 Введи описание или нажми «Пропустить»:",
+        reply_markup=skip_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "skip_desc", TransactionStates.waiting_description)
+async def skip_description(callback: CallbackQuery, state: FSMContext):
+    """Пропуск описания -> сохранение транзакции"""
+    if callback.from_user.id not in ALLOWED_USERS:
+        return
     
     data = await state.get_data()
     
@@ -305,8 +325,8 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     success = write_transaction(
         data["trans_type"],
         data["amount"],
-        data["description"],
-        category["name"]
+        "-",
+        data["category"]
     )
     
     if success:
@@ -317,14 +337,51 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"✅ <b>{type_text} записан!</b>\n\n"
             f"💵 Сумма: {data['amount']}\n"
-            f"📝 Описание: {data['description']}\n"
-            f"🏷 Категория: {category['name']}"
+            f"📝 Описание: -\n"
+            f"🏷 Категория: {data['category']}"
         )
         await callback.answer("✅ Записано!")
     else:
         await callback.answer("❌ Ошибка записи", show_alert=True)
     
     await state.clear()
+
+
+@router.message(TransactionStates.waiting_description)
+async def enter_description(message: Message, state: FSMContext):
+    """Ввод описания -> сохранение транзакции"""
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+    
+    description = message.text.strip()[:100]  # Ограничиваем длину
+    data = await state.get_data()
+    
+    # Записываем транзакцию
+    success = write_transaction(
+        data["trans_type"],
+        data["amount"],
+        description,
+        data["category"]
+    )
+    
+    if success:
+        is_expense = data["trans_type"] == "expense"
+        emoji = "💸" if is_expense else "💰"
+        type_text = "Расход" if is_expense else "Доход"
+        
+        await message.answer(
+            f"✅ <b>{type_text} записан!</b>\n\n"
+            f"💵 Сумма: {data['amount']}\n"
+            f"📝 Описание: {description}\n"
+            f"🏷 Категория: {data['category']}"
+        )
+    else:
+        await message.answer("❌ Ошибка записи")
+    
+    await state.clear()
+
+
+# Старый обработчик select_category удалён - логика перенесена выше
 
 
 @router.callback_query(F.data == "cancel")
