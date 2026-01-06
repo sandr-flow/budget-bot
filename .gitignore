@@ -1,0 +1,13 @@
+# Virtual environment
+venv/
+
+# Environment variables (contains secrets)
+.env
+
+# Google Cloud service account credentials
+*.json
+!package.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
