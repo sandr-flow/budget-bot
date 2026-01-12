@@ -25,8 +25,16 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID = os.getenv("SHEET_ID")
 ALLOWED_USERS = [int(x.strip()) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()]
-GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "service_account.json")
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "4"))
+
+# Determine credentials file path based on environment
+_creds_filename = os.getenv("GOOGLE_CREDENTIALS_FILE", "service_account.json")
+if os.path.exists("/data"):
+    # Amvera environment - use persistent storage
+    GOOGLE_CREDENTIALS_FILE = f"/data/{_creds_filename}"
+else:
+    # Local environment
+    GOOGLE_CREDENTIALS_FILE = _creds_filename
 
 # Sheet configuration
 SHEET_TRANSACTIONS = "Транзакции"
