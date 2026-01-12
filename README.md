@@ -8,6 +8,7 @@ A Telegram bot for family budget tracking with Google Sheets integration.
 - [Install](#install)
 - [Usage](#usage)
 - [Configuration](#configuration)
+- [Amvera Deployment](#amvera-deployment)
 - [License](#license)
 
 ## Background
@@ -114,6 +115,14 @@ The bot expects a sheet named "Транзакции" with:
 Categories are loaded from a "Settings" sheet with columns:
 - Column A: Category name
 - Column B: Type (`expense` or `income`)
+
+## Amvera Deployment
+
+When deploying to [Amvera](https://amvera.ru/), the bot automatically detects the environment and looks for credentials in persistent storage.
+
+1. Upload your service account JSON to **Data** → `/data/your_credentials.json`
+2. Set environment variable `GOOGLE_CREDENTIALS_FILE=your_credentials.json` (filename only, not full path)
+3. The bot will automatically prepend `/data/` when running on Amvera
 
 ## License
 
